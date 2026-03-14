@@ -1,27 +1,27 @@
-# Safehouse Integration for NanoClaw
+# Safehouse — Silent Command Safety for NanoClaw Containers
 
 ## What is Safehouse?
 
-[Safehouse](https://github.com/qwibitai/safehouse) is an AI-safe Linux overlay that makes destructive OS commands safe by default. It works by placing a thin C shim (`safehouse_wrap`) in the command path. The AI sees normal command names (`rm`, `mv`, `dd`, etc.) but destructive operations are blocked, logged, and trigger alerts based on per-command policy files.
+Safehouse is a defense-in-depth layer inside NanoClaw's agent containers. A thin C shim (`safehouse_wrap`) sits in the command path via symlinks. The agent sees normal command names (`rm`, `mv`, `dd`, etc.) but destructive operations are silently blocked and logged based on per-command policy files.
 
 **Key properties:**
 - Zero dependencies (single C binary, no dynamic allocation)
 - Policy-driven: each command has a `.policy` file defining what's blocked
-- Transparent to the AI — it doesn't know commands are wrapped
-- Exit code 125 = blocked by policy (distinct from any real binary exit code)
-- Full event logging with ISO 8601 timestamps
+- **Completely invisible to the agent** — blocked commands return exit 0 with no stderr output; the agent believes the operation succeeded
+- Opt-in via `SAFEHOUSE_ENABLED=true` (disabled by default for development)
+- Event logging and host-side alerts (agent never sees these)
 
-## Why Add Safehouse Inside NanoClaw Containers?
+## Why Safehouse?
 
 NanoClaw's containers provide **isolation** — the agent can't escape the sandbox. But inside that sandbox, the agent still has full destructive power over its own workspace. A jailbroken or prompt-injected agent could:
 
 - `rm -rf /workspace/group` — destroy all group data and conversation history
 - `dd if=/dev/zero of=/workspace/group/CLAUDE.md` — corrupt memory files
-- `mv /workspace/group/conversations /dev/null` — silently destroy archives
+- `mv /workspace/ipc /dev/null` — destroy IPC communication
 - `chmod 000 /workspace/ipc` — break IPC communication
 - Overwrite the agent-runner source at `/app/src/` to modify its own behavior
 
-Safehouse adds **defense in depth**: even inside the container, destructive operations are policy-gated. The agent can use `rm`, `mv`, etc. for legitimate work, but dangerous patterns (force flags, system paths, recursive operations on critical directories) are blocked and logged.
+Safehouse silently neutralizes these operations. The agent thinks the command succeeded, but nothing happened. Only the host sees the alerts.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -37,134 +37,119 @@ Safehouse adds **defense in depth**: even inside the container, destructive oper
 │          │                                       │
 │     ALLOWED? ──yes──▶ exec real binary           │
 │          │                                       │
-│         no ──▶ log event, return exit 125        │
+│         no ──▶ log event, return exit 0          │
+│                (silent — agent sees success)      │
 │                                                  │
 └─────────────────────────────────────────────────┘
+         │ (host-side only)
+         ▼
+   IPC alerts → main channel notification
 ```
 
-## Implementation Plan
+## Enabling Safehouse
 
-### Phase 1: Build Safehouse for the Container Image
+Safehouse is **disabled by default** so development workflows aren't restricted. To enable for production, add to your `.env`:
 
-Safehouse compiles to a single binary with `gcc`. Add it to the NanoClaw Dockerfile.
-
-**Changes to `container/Dockerfile`:**
-
-```dockerfile
-# --- Safehouse command-safety layer ---
-# Clone and build safehouse (single C binary, no deps beyond gcc)
-RUN apt-get update && apt-get install -y gcc git \
-    && git clone https://github.com/qwibitai/safehouse.git /tmp/safehouse \
-    && cd /tmp/safehouse && make \
-    && mkdir -p /usr/local/lib/safehouse /etc/safehouse/policies \
-    && cp bin/safehouse_wrap /usr/local/lib/safehouse/ \
-    && cp policies/*.policy /etc/safehouse/policies/ \
-    && rm -rf /tmp/safehouse \
-    && apt-get remove -y gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create safe_* symlinks for each wrapped command
-# These go in /usr/local/bin which is earlier in PATH than /usr/bin
-RUN for cmd in rm mv dd mkfs fdisk chmod chown curl wget kill crontab; do \
-      ln -s /usr/local/lib/safehouse/safehouse_wrap /usr/local/bin/$cmd; \
-    done
-
-# Safehouse log directory (writable by node user)
-RUN mkdir -p /var/log/safehouse && chown node:node /var/log/safehouse
+```
+SAFEHOUSE_ENABLED=true
 ```
 
-**How it works:** When the agent runs `rm -rf /workspace/group`, the shell resolves `/usr/local/bin/rm` (the safehouse symlink) before `/usr/bin/rm`. The shim loads `/etc/safehouse/policies/rm.policy`, checks the args against policy rules, and either blocks (exit 125 + log) or exec's the real `/usr/bin/rm`.
+When disabled, the shim still sits in the PATH but immediately passes through to the real binary with zero overhead — no policy checks, no logging.
 
-### Phase 2: Container-Specific Policies
+## How It Works
 
-The default safehouse policies protect system paths (`/etc/`, `/usr/`, etc.). Inside NanoClaw containers, we also need to protect container-critical paths. Create container-specific policies or extend existing ones.
+### Build Time
 
-**New file: `container/safehouse-policies/rm.policy`**
+The safehouse shim is compiled from source (`container/safehouse/safehouse_wrap.c`) during the Docker build. Symlinks in `/usr/local/bin/` (higher PATH priority than `/usr/bin/`) point to the shim for each wrapped command. Policies are copied from `container/safehouse-policies/`.
+
+Safehouse is always **baked into the image**. The same image works for both development (disabled) and production (enabled) — toggled at runtime via the `SAFEHOUSE_ENABLED` environment variable.
+
+### Runtime (enabled)
+
+1. Agent runs `rm -rf /app/src`
+2. Shell resolves `/usr/local/bin/rm` → safehouse shim
+3. Shim checks `SAFEHOUSE_ENABLED=1`, loads `/etc/safehouse/policies/rm.policy`
+4. Policy blocks: `-f` flag is in `BLOCK_FLAG` list
+5. Shim logs the event to `/var/log/safehouse/events.log`
+6. Shim writes alert to `/workspace/ipc/safehouse_alerts.jsonl`
+7. Shim returns **exit 0** with **no output** — agent thinks it worked
+8. Host IPC watcher picks up the alert and notifies the main channel
+
+### Runtime (disabled)
+
+1. Agent runs `rm -rf /app/src`
+2. Shell resolves `/usr/local/bin/rm` → safehouse shim
+3. Shim checks `SAFEHOUSE_ENABLED` != `1`, immediately `execv()`s `/usr/bin/rm`
+4. Real binary runs normally — no policy checks, no logging
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `container/safehouse/safehouse_wrap.c` | C shim source — single file, no external deps |
+| `container/safehouse/safehouse_alert.sh` | Alert script — writes blocked events to IPC |
+| `container/safehouse/Makefile` | Builds the shim |
+| `container/safehouse-policies/*.policy` | Per-command policy files (11 commands) |
+| `src/config.ts` | `SAFEHOUSE_ENABLED` flag |
+| `src/container-runner.ts` | Passes env var, mounts log dir when enabled |
+| `src/ipc.ts` | Monitors alerts, notifies main channel |
+
+## Policy Format
+
+Each wrapped command has a `.policy` file in `container/safehouse-policies/`:
+
 ```
-REAL_BINARY     /usr/bin/rm
-BLOCK_FLAG      -f
-BLOCK_ARG       /app/
-BLOCK_ARG       /usr/
-BLOCK_ARG       /etc/
-BLOCK_ARG       /var/
-BLOCK_ARG       /workspace/ipc/
-BLOCK_ARG       /tmp/dist/
+REAL_BINARY     /usr/bin/rm        # Path to the real binary (required)
+BLOCK_FLAG      -f                 # Block if this exact flag appears
+BLOCK_ARG       /app               # Block if any arg starts with this prefix
+ALLOW_FLAG      -l                 # Always allow if this flag is present
 ```
 
-**Rationale for each protected path:**
+- `BLOCK_FLAG` — exact match against arguments (e.g., `-f`, `-R`)
+- `BLOCK_ARG` — prefix match (e.g., `/app` matches `/app/src/index.ts`)
+- `ALLOW_FLAG` — checked first; if present, skips all block checks (e.g., `fdisk -l`)
+
+## Protected Paths
+
 | Path | Why block |
 |------|-----------|
-| `/app/` | Agent-runner source and node_modules — self-modification prevention |
-| `/workspace/ipc/` | IPC channels to host — agent shouldn't delete these |
-| `/tmp/dist/` | Compiled agent-runner — tampering changes agent behavior |
-| `/usr/`, `/etc/`, `/var/` | System directories (inherited from default policies) |
+| `/app` | Agent-runner source and node_modules — self-modification prevention |
+| `/workspace/ipc` | IPC channels to host — agent shouldn't delete or modify these |
+| `/tmp/dist` | Compiled agent-runner — tampering changes agent behavior |
+| `/usr/`, `/etc/`, `/var/` | System directories |
+| `/dev/` | Device files (dd, mv) |
 
-Similar adjustments for `mv.policy`, `chmod.policy`, `chown.policy`, `dd.policy`.
-
-### Phase 3: Event Log Forwarding
-
-Safehouse logs every invocation (blocked or allowed) to `/var/log/safehouse/events.log`. Forward these events to the host for monitoring.
-
-**Option A — Mount the log directory:**
-Add to `container-runner.ts` volume mounts:
-```typescript
-mounts.push({
-  hostPath: path.join(logsDir, 'safehouse'),
-  containerPath: '/var/log/safehouse',
-  readonly: false,
-});
-```
-
-**Option B — Alert command:**
-Set `SAFEHOUSE_ALERT_CMD` in the container environment to write blocked events to a known IPC location that the host monitors:
-```dockerfile
-ENV SAFEHOUSE_ALERT_CMD="echo '{\"type\":\"safehouse_blocked\",\"cmd\":\"$SAFEHOUSE_CMD\",\"reason\":\"$SAFEHOUSE_REASON\",\"arg\":\"$SAFEHOUSE_ARG\"}' >> /workspace/ipc/safehouse_alerts.json"
-```
-
-The host process can then watch for alerts and notify the user (e.g., via the messaging channel).
-
-### Phase 4: Safehouse-Aware Monitoring (Optional)
-
-Extend NanoClaw's host process to react to safehouse events:
-
-1. **Alert on blocked operations** — If the agent triggers a block, send a message to the main channel: "Agent in group X tried to `rm -rf /app/` — blocked by safehouse"
-2. **Anomaly scoring** — Track blocked event frequency. A burst of blocks suggests the agent is actively trying to do something destructive (possible jailbreak)
-3. **Session termination** — After N blocks in a time window, kill the container and alert the user
-
-### Phase 5: Skill-Based Installation
-
-Following NanoClaw's philosophy of "skills over features", package this as a Claude Code skill.
-
-**New file: `.claude/skills/add-safehouse/SKILL.md`**
-
-The `/add-safehouse` skill would:
-1. Clone the safehouse repo
-2. Add the Dockerfile modifications
-3. Create container-specific policies
-4. Add log mount to `container-runner.ts`
-5. Optionally add host-side alert monitoring
-6. Rebuild the container image
-
-## What Safehouse Currently Wraps
+## Wrapped Commands
 
 | Command | What's blocked | Policy file |
 |---------|---------------|-------------|
-| `rm` | `-f` flag, system paths | `rm.policy` |
-| `mv` | `-f` flag, system path sources/destinations | `mv.policy` |
-| `dd` | `of=` to devices and system paths | `dd.policy` |
+| `rm` | `-f` flag, protected paths | `rm.policy` |
+| `mv` | `-f` flag, protected paths, `/dev/` destinations | `mv.policy` |
+| `dd` | `of=` to devices and protected paths | `dd.policy` |
 | `mkfs` | All device arguments | `mkfs.policy` |
 | `fdisk` | `/dev/` access (except `-l` list) | `fdisk.policy` |
-| `chmod` | Recursive, setuid bits, system paths | `chmod.policy` |
-| `chown` | Recursive, root ownership, system paths | `chown.policy` |
-| `curl` | Output to system paths, `--config` | `curl.policy` |
-| `wget` | Output to system paths | `wget.policy` |
+| `chmod` | `-R` recursive, setuid bits, protected paths | `chmod.policy` |
+| `chown` | `-R` recursive, root ownership, protected paths | `chown.policy` |
+| `curl` | `--config`, output to protected paths | `curl.policy` |
+| `wget` | Output to protected paths | `wget.policy` |
 | `kill` | SIGKILL, SIGSTOP, PID 1 | `kill.policy` |
 | `crontab` | `-e` and `-r` (allows `-l` list) | `crontab.policy` |
+
+## Host-Side Monitoring
+
+When safehouse blocks a command, the host IPC watcher (`src/ipc.ts`):
+
+1. Reads `safehouse_alerts.jsonl` from the group's IPC directory
+2. Logs the event with group name, command, and reason
+3. Sends an alert to the main channel (e.g., "Safehouse blocked 2 destructive commands in group X")
+4. Tracks block counts per group for anomaly detection
+
+The agent never sees any of this — alerts flow only to the host.
 
 ## Architecture Fit
 
 ```
-NanoClaw Security Layers (with Safehouse):
+NanoClaw Security Layers:
 
 Layer 1: Container Isolation (Docker/VM)
   → Agent can't access host filesystem or processes
@@ -175,12 +160,13 @@ Layer 2: Mount Security (host-side allowlist)
 Layer 3: Credential Proxy
   → Agent never sees real API keys or tokens
 
-Layer 4: Safehouse (NEW — inside container)
-  → Destructive commands are policy-blocked even within the sandbox
-  → All command invocations are logged for audit
+Layer 4: Safehouse (inside container)
+  → Destructive commands silently neutralized
+  → Agent believes operations succeeded
+  → All events logged for host-side audit
 
 Layer 5: Read-only mounts
   → Project root and global memory are read-only
 ```
 
-Safehouse fills the gap at Layer 4: even though the agent is sandboxed, it shouldn't be able to destroy its own workspace data or tamper with the agent-runner infrastructure inside the container.
+Safehouse fills the gap at Layer 4: even though the agent is sandboxed, it shouldn't be able to destroy its own workspace data or tamper with the agent-runner infrastructure inside the container. And it should never know that it can't.
