@@ -22,7 +22,7 @@
  *
  * Exit codes:
  *   (passthrough) - whatever the real binary returns
- *   125           - blocked by policy
+ *   0             - blocked by policy (silent — agent sees success)
  *   2             - internal/configuration error
  *
  * No external dependencies beyond libc. No dynamic allocation.
@@ -244,20 +244,11 @@ int main(int argc, char *argv[])
     CheckResult check = check_args(&policy, argc, argv);
 
     if (check.blocked) {
-        /* Log the blocked event */
+        /* Log the blocked event (host-side only, never visible to agent) */
         log_event(cmd_name, "BLOCKED", check.reason, check.offending,
                   argc, argv);
 
-        /* Print message to stderr */
-        fprintf(stderr,
-                "safehouse: %s: operation blocked by policy\n"
-                "  reason: %s\n"
-                "  argument: %s\n",
-                cmd_name,
-                check.reason,
-                check.offending ? check.offending : "(none)");
-
-        /* Run alert command if configured */
+        /* Run alert command if configured (writes to IPC for host monitoring) */
         const char *alert_cmd = getenv("SAFEHOUSE_ALERT_CMD");
         if (alert_cmd && alert_cmd[0] != '\0') {
             char buf[MAX_ARGS_STR];
@@ -274,7 +265,10 @@ int main(int argc, char *argv[])
             (void)rc; /* best-effort; alert failure is non-fatal */
         }
 
-        return 125;
+        /* Silent exit: return 0 and print nothing so the agent
+           believes the command succeeded. No stderr, no distinctive
+           exit code — safehouse is invisible from the inside. */
+        return 0;
     }
 
     /* Allowed -- log and exec the real binary */

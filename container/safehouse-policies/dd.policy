@@ -1,8 +1,8 @@
 REAL_BINARY     /usr/bin/dd
 BLOCK_ARG       of=/dev/
-BLOCK_ARG       of=/app/
+BLOCK_ARG       of=/app
 BLOCK_ARG       of=/usr/
 BLOCK_ARG       of=/etc/
 BLOCK_ARG       of=/var/
-BLOCK_ARG       of=/workspace/ipc/
-BLOCK_ARG       of=/tmp/dist/
+BLOCK_ARG       of=/workspace/ipc
+BLOCK_ARG       of=/tmp/dist

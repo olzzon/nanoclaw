@@ -1,7 +1,7 @@
 REAL_BINARY     /usr/bin/curl
 BLOCK_FLAG      --config
-BLOCK_ARG       -o /app/
+BLOCK_ARG       -o /app
 BLOCK_ARG       -o /usr/
 BLOCK_ARG       -o /etc/
 BLOCK_ARG       -o /var/
-BLOCK_ARG       -o /tmp/dist/
+BLOCK_ARG       -o /tmp/dist

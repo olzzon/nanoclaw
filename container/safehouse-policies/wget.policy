@@ -1,6 +1,6 @@
 REAL_BINARY     /usr/bin/wget
-BLOCK_ARG       -O /app/
+BLOCK_ARG       -O /app
 BLOCK_ARG       -O /usr/
 BLOCK_ARG       -O /etc/
 BLOCK_ARG       -O /var/
-BLOCK_ARG       -O /tmp/dist/
+BLOCK_ARG       -O /tmp/dist
