@@ -14,6 +14,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  SAFEHOUSE_ENABLED,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -176,14 +177,16 @@ function buildVolumeMounts(
   });
 
   // Safehouse event log directory (per-group, writable)
-  // Safehouse writes blocked/allowed events here; host monitors for alerts.
-  const safehouseLogDir = path.join(DATA_DIR, 'safehouse-logs', group.folder);
-  fs.mkdirSync(safehouseLogDir, { recursive: true });
-  mounts.push({
-    hostPath: safehouseLogDir,
-    containerPath: '/var/log/safehouse',
-    readonly: false,
-  });
+  // Only mount when safehouse is enabled to avoid unnecessary directories.
+  if (SAFEHOUSE_ENABLED) {
+    const safehouseLogDir = path.join(DATA_DIR, 'safehouse-logs', group.folder);
+    fs.mkdirSync(safehouseLogDir, { recursive: true });
+    mounts.push({
+      hostPath: safehouseLogDir,
+      containerPath: '/var/log/safehouse',
+      readonly: false,
+    });
+  }
 
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
@@ -247,6 +250,9 @@ function buildContainerArgs(
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
+
+  // Safehouse: pass enabled/disabled to container for runtime toggle
+  args.push('-e', `SAFEHOUSE_ENABLED=${SAFEHOUSE_ENABLED ? '1' : '0'}`);
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

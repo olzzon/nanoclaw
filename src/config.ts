@@ -67,6 +67,11 @@ export const TRIGGER_PATTERN = new RegExp(
   'i',
 );
 
+// Safehouse: defense-in-depth command blocking inside containers.
+// Disabled by default (development). Set SAFEHOUSE_ENABLED=true for production.
+export const SAFEHOUSE_ENABLED =
+  (process.env.SAFEHOUSE_ENABLED || 'false').toLowerCase() === 'true';
+
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
 export const TIMEZONE =

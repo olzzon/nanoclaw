@@ -229,6 +229,17 @@ int main(int argc, char *argv[])
         return 2;
     }
 
+    /* Runtime kill-switch: if SAFEHOUSE_ENABLED != "1", pass through
+       to the real binary without any policy checks or logging. */
+    const char *enabled = getenv("SAFEHOUSE_ENABLED");
+    if (!enabled || strcmp(enabled, "1") != 0) {
+        argv[0] = policy.real_binary;
+        execv(policy.real_binary, argv);
+        fprintf(stderr, "safehouse: exec %s failed: %s\n",
+                policy.real_binary, strerror(errno));
+        return 2;
+    }
+
     /* Check arguments against policy */
     CheckResult check = check_args(&policy, argc, argv);
 
