@@ -175,6 +175,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Safehouse event log directory (per-group, writable)
+  // Safehouse writes blocked/allowed events here; host monitors for alerts.
+  const safehouseLogDir = path.join(DATA_DIR, 'safehouse-logs', group.folder);
+  fs.mkdirSync(safehouseLogDir, { recursive: true });
+  mounts.push({
+    hostPath: safehouseLogDir,
+    containerPath: '/var/log/safehouse',
+    readonly: false,
+  });
+
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.

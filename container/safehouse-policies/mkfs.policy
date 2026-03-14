@@ -1,0 +1,2 @@
+REAL_BINARY     /sbin/mkfs
+BLOCK_ARG       /dev/

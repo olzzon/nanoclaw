@@ -26,6 +26,14 @@ export interface IpcDeps {
 
 let ipcWatcherRunning = false;
 
+// Track safehouse block counts per group for anomaly detection
+const safehouseBlockCounts = new Map<string, number>();
+
+/** Get the current safehouse block count for a group (for external monitoring). */
+export function getSafehouseBlockCount(groupFolder: string): number {
+  return safehouseBlockCounts.get(groupFolder) || 0;
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');
@@ -143,6 +151,66 @@ export function startIpcWatcher(deps: IpcDeps): void {
         }
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
+      }
+
+      // Process safehouse alerts (blocked destructive commands)
+      const alertsFile = path.join(
+        ipcBaseDir,
+        sourceGroup,
+        'safehouse_alerts.jsonl',
+      );
+      try {
+        if (fs.existsSync(alertsFile)) {
+          const content = fs.readFileSync(alertsFile, 'utf-8').trim();
+          if (content) {
+            const lines = content.split('\n').filter(Boolean);
+            for (const line of lines) {
+              try {
+                const alert = JSON.parse(line);
+                logger.warn(
+                  {
+                    sourceGroup,
+                    cmd: alert.cmd,
+                    reason: alert.reason,
+                    arg: alert.arg,
+                  },
+                  'Safehouse blocked destructive command',
+                );
+                safehouseBlockCounts.set(
+                  sourceGroup,
+                  (safehouseBlockCounts.get(sourceGroup) || 0) + 1,
+                );
+              } catch {
+                // Malformed line, skip
+              }
+            }
+
+            // Alert the main group about blocked operations
+            const mainGroup = Object.entries(registeredGroups).find(
+              ([, g]) => g.isMain,
+            );
+            if (mainGroup) {
+              const [mainJid] = mainGroup;
+              const count = lines.length;
+              const groupName =
+                Object.values(registeredGroups).find(
+                  (g) => g.folder === sourceGroup,
+                )?.name || sourceGroup;
+              await deps.sendMessage(
+                mainJid,
+                `\u26a0\ufe0f Safehouse blocked ${count} destructive command${count > 1 ? 's' : ''} in group "${groupName}". Check logs for details.`,
+              );
+            }
+
+            // Truncate the alerts file after processing
+            fs.writeFileSync(alertsFile, '');
+          }
+        }
+      } catch (err) {
+        logger.error(
+          { err, sourceGroup },
+          'Error processing safehouse alerts',
+        );
       }
     }
 

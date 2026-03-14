@@ -1,0 +1,3 @@
+REAL_BINARY     /sbin/fdisk
+BLOCK_ARG       /dev/
+ALLOW_FLAG      -l

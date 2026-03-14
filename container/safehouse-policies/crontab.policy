@@ -1,0 +1,4 @@
+REAL_BINARY     /usr/bin/crontab
+BLOCK_FLAG      -e
+BLOCK_FLAG      -r
+ALLOW_FLAG      -l

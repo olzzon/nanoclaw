@@ -1,0 +1,10 @@
+REAL_BINARY     /usr/bin/chmod
+BLOCK_FLAG      -R
+BLOCK_ARG       /app/
+BLOCK_ARG       /usr/
+BLOCK_ARG       /etc/
+BLOCK_ARG       /var/
+BLOCK_ARG       /workspace/ipc/
+BLOCK_ARG       /tmp/dist/
+BLOCK_ARG       4
+BLOCK_ARG       2

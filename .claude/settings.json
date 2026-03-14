@@ -1,1 +1,8 @@
-{}
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(./container/build.sh)"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+REAL_BINARY     /usr/bin/chown
+BLOCK_FLAG      -R
+BLOCK_ARG       /app/
+BLOCK_ARG       /usr/
+BLOCK_ARG       /etc/
+BLOCK_ARG       /var/
+BLOCK_ARG       /workspace/ipc/
+BLOCK_ARG       /tmp/dist/
+BLOCK_ARG       root

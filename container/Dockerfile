@@ -24,7 +24,38 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    gcc \
+    make \
     && rm -rf /var/lib/apt/lists/*
+
+# --- Safehouse command-safety layer ---
+# Build safehouse shim (single C binary, no external deps)
+COPY safehouse/ /tmp/safehouse/
+RUN cd /tmp/safehouse && make \
+    && mkdir -p /usr/local/lib/safehouse /etc/safehouse/policies \
+    && cp bin/safehouse_wrap /usr/local/lib/safehouse/ \
+    && cp safehouse_alert.sh /usr/local/lib/safehouse/ \
+    && chmod +x /usr/local/lib/safehouse/safehouse_alert.sh \
+    && rm -rf /tmp/safehouse
+
+# Copy container-specific policies (overrides defaults)
+COPY safehouse-policies/*.policy /etc/safehouse/policies/
+
+# Create symlinks so safehouse intercepts destructive commands
+# /usr/local/bin is earlier in PATH than /usr/bin
+RUN for cmd in rm mv dd mkfs fdisk chmod chown curl wget kill crontab; do \
+      ln -sf /usr/local/lib/safehouse/safehouse_wrap /usr/local/bin/$cmd; \
+    done
+
+# Safehouse log directory (use real chmod to bypass safehouse during build)
+RUN mkdir -p /var/log/safehouse && /usr/bin/chmod 777 /var/log/safehouse
+
+# Safehouse log and alert configuration
+ENV SAFEHOUSE_LOG_DIR=/var/log/safehouse
+ENV SAFEHOUSE_ALERT_CMD=/usr/local/lib/safehouse/safehouse_alert.sh
+
+# Remove build tools no longer needed (use real rm to bypass safehouse during build)
+RUN apt-get purge -y gcc make && apt-get autoremove -y && /usr/bin/rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -55,10 +86,12 @@ RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/
 # Container input (prompt, group info) is passed via stdin JSON.
 # Credentials are injected by the host's credential proxy — never passed here.
 # Follow-up messages arrive via IPC files in /workspace/ipc/input/
-RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\nchmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
+# Entrypoint uses real binaries (bypasses safehouse) for trusted setup operations
+RUN printf '#!/bin/bash\nset -e\ncd /app && npx tsc --outDir /tmp/dist 2>&1 >&2\nln -s /app/node_modules /tmp/dist/node_modules\n/usr/bin/chmod -R a-w /tmp/dist\ncat > /tmp/input.json\nnode /tmp/dist/index.js < /tmp/input.json\n' > /app/entrypoint.sh && /usr/bin/chmod +x /app/entrypoint.sh
 
 # Set ownership to node user (non-root) for writable directories
-RUN chown -R node:node /workspace && chmod 777 /home/node
+# Use real binaries to bypass safehouse during build
+RUN /usr/bin/chown -R node:node /workspace && /usr/bin/chmod 777 /home/node
 
 # Switch to non-root user (required for --dangerously-skip-permissions)
 USER node
