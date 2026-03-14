@@ -207,10 +207,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
           }
         }
       } catch (err) {
-        logger.error(
-          { err, sourceGroup },
-          'Error processing safehouse alerts',
-        );
+        logger.error({ err, sourceGroup }, 'Error processing safehouse alerts');
       }
     }
 
