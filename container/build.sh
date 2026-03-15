@@ -9,11 +9,17 @@ cd "$SCRIPT_DIR"
 IMAGE_NAME="nanoclaw-agent"
 TAG="${1:-latest}"
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-docker}"
+# SAFEHOUSE=1 (enabled) or SAFEHOUSE=0 (default, disabled)
+SAFEHOUSE="${SAFEHOUSE:-0}"
 
-echo "Building NanoClaw agent container image..."
+if [ "$SAFEHOUSE" = "1" ]; then
+  echo "Building NanoClaw agent container image (safehouse ENABLED)..."
+else
+  echo "Building NanoClaw agent container image..."
+fi
 echo "Image: ${IMAGE_NAME}:${TAG}"
 
-${CONTAINER_RUNTIME} build -t "${IMAGE_NAME}:${TAG}" .
+${CONTAINER_RUNTIME} build --build-arg SAFEHOUSE="${SAFEHOUSE}" -t "${IMAGE_NAME}:${TAG}" .
 
 echo ""
 echo "Build complete!"

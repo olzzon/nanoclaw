@@ -46,23 +46,61 @@ Safehouse silently neutralizes these operations. The agent thinks the command su
    IPC alerts → main channel notification
 ```
 
-## Enabling Safehouse Log Collection
+## Building With and Without Safehouse
 
-Safehouse is **always active** inside the container — there is no way to disable it at runtime. All paths (policies, logs, alert script) are compiled into the binary.
+Safehouse is controlled at **build time**, not runtime. This means the agent inside the container can never disable it — you choose the security posture when you build the image.
 
-The host-side `SAFEHOUSE_ENABLED` setting in `.env` controls only whether safehouse **log directories are mounted** from the host for persistent audit collection:
+Safehouse is **disabled by default** — it's an opt-in feature for users who want the extra protection.
+
+### Default — no safehouse
+
+```bash
+./container/build.sh
+```
+
+Commands like `rm`, `mv`, `chmod` etc. go directly to the real binaries. This is the default for general use, setup, and development.
+
+### Enabling safehouse
+
+```bash
+SAFEHOUSE=1 ./container/build.sh
+```
+
+All destructive commands are intercepted by the safehouse shim. The agent cannot turn it off.
+
+### Switching between modes
+
+Just rebuild and restart:
+
+```bash
+# Enable safehouse
+SAFEHOUSE=1 ./container/build.sh
+systemctl --user restart nanoclaw    # or: launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+
+# Disable safehouse (back to default)
+./container/build.sh
+systemctl --user restart nanoclaw
+```
+
+Both builds use the same image name and tag (`nanoclaw-agent:latest`), so the host picks up the new image automatically on the next container launch. No code or config changes needed — just rebuild.
+
+The shim binary and policies are always baked into the image either way (good layer caching). The only difference is whether the symlinks in `/usr/local/bin/` exist to route commands through the shim.
+
+### Log collection
+
+The host-side `SAFEHOUSE_ENABLED` setting in `.env` controls whether safehouse **log directories are mounted** from the host for persistent audit collection:
 
 ```
 SAFEHOUSE_ENABLED=true
 ```
 
-When `SAFEHOUSE_ENABLED=true`, the host mounts a per-group log directory at `/var/log/safehouse` so blocked-event logs persist across container restarts. When false, safehouse still blocks commands and writes IPC alerts, but the internal log file is ephemeral (lost when the container stops).
+When `true`, the host mounts a per-group log directory at `/var/log/safehouse` so blocked-event logs persist across container restarts. When `false`, safehouse still blocks commands and writes IPC alerts (if the image was built with safehouse), but the internal log file is ephemeral (lost when the container stops).
 
 ## How It Works
 
 ### Build Time
 
-The safehouse shim is compiled from source (`container/safehouse/safehouse_wrap.c`) during the Docker build. Symlinks in `/usr/local/bin/` (higher PATH priority than `/usr/bin/`) point to the shim for each wrapped command. Policies are copied from `container/safehouse-policies/`.
+The safehouse shim is compiled from source (`container/safehouse/safehouse_wrap.c`) during the Docker build. When `SAFEHOUSE=1`, symlinks in `/usr/local/bin/` (higher PATH priority than `/usr/bin/`) point to the shim for each wrapped command. When `SAFEHOUSE=0`, the symlinks are skipped and commands resolve to the real binaries directly. Policies are copied from `container/safehouse-policies/`.
 
 All paths are **hardcoded at compile time**:
 - Policy directory: `/etc/safehouse/policies`
