@@ -43,7 +43,7 @@ COPY safehouse-policies/*.policy /etc/safehouse/policies/
 
 # Create symlinks so safehouse intercepts destructive commands
 # /usr/local/bin is earlier in PATH than /usr/bin
-RUN for cmd in rm mv dd mkfs fdisk chmod chown curl wget kill crontab; do \
+RUN for cmd in rm mv cp ln dd mkfs fdisk chmod chown curl wget tee truncate kill pkill killall crontab; do \
       ln -sf /usr/local/lib/safehouse/safehouse_wrap /usr/local/bin/$cmd; \
     done
 

@@ -125,6 +125,8 @@ ALLOW_FLAG      -l                 # Always allow if this flag is present
 |---------|---------------|-------------|
 | `rm` | `-f` flag, protected paths | `rm.policy` |
 | `mv` | `-f` flag, protected paths, `/dev/` destinations | `mv.policy` |
+| `cp` | `-f` flag, protected path destinations | `cp.policy` |
+| `ln` | Protected paths, `/dev/` targets | `ln.policy` |
 | `dd` | `of=` to devices and protected paths | `dd.policy` |
 | `mkfs` | All device arguments | `mkfs.policy` |
 | `fdisk` | `/dev/` access (except `-l` list) | `fdisk.policy` |
@@ -132,7 +134,11 @@ ALLOW_FLAG      -l                 # Always allow if this flag is present
 | `chown` | `-R` recursive, root ownership, protected paths | `chown.policy` |
 | `curl` | `--config`, output to protected paths | `curl.policy` |
 | `wget` | Output to protected paths | `wget.policy` |
+| `tee` | Protected path destinations | `tee.policy` |
+| `truncate` | Protected paths | `truncate.policy` |
 | `kill` | SIGKILL, SIGSTOP, PID 1 | `kill.policy` |
+| `pkill` | SIGKILL, SIGSTOP, critical process names | `pkill.policy` |
+| `killall` | SIGKILL, SIGSTOP, critical process names | `killall.policy` |
 | `crontab` | `-e` and `-r` (allows `-l` list) | `crontab.policy` |
 
 ## Host-Side Monitoring

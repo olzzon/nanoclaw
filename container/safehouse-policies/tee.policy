@@ -1,0 +1,7 @@
+REAL_BINARY     /usr/bin/tee
+BLOCK_ARG       /app
+BLOCK_ARG       /usr/
+BLOCK_ARG       /etc/
+BLOCK_ARG       /var/
+BLOCK_ARG       /workspace/ipc
+BLOCK_ARG       /tmp/dist

@@ -1,0 +1,9 @@
+REAL_BINARY     /usr/bin/pkill
+BLOCK_FLAG      -9
+BLOCK_FLAG      -KILL
+BLOCK_FLAG      -SIGKILL
+BLOCK_FLAG      -STOP
+BLOCK_FLAG      -SIGSTOP
+BLOCK_ARG       node
+BLOCK_ARG       bash
+BLOCK_ARG       safehouse

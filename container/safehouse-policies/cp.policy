@@ -1,0 +1,8 @@
+REAL_BINARY     /usr/bin/cp
+BLOCK_FLAG      -f
+BLOCK_ARG       /app
+BLOCK_ARG       /usr/
+BLOCK_ARG       /etc/
+BLOCK_ARG       /var/
+BLOCK_ARG       /workspace/ipc
+BLOCK_ARG       /tmp/dist
