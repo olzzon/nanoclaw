@@ -251,8 +251,8 @@ function buildContainerArgs(
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
   }
 
-  // Safehouse: pass enabled/disabled to container for runtime toggle
-  args.push('-e', `SAFEHOUSE_ENABLED=${SAFEHOUSE_ENABLED ? '1' : '0'}`);
+  // Safehouse is always active inside the container (compiled in, not toggleable).
+  // SAFEHOUSE_ENABLED on the host controls log mount setup only.
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());

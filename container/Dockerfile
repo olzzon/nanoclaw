@@ -50,9 +50,8 @@ RUN for cmd in rm mv cp ln dd mkfs fdisk chmod chown curl wget tee truncate kill
 # Safehouse log directory (use real chmod to bypass safehouse during build)
 RUN mkdir -p /var/log/safehouse && /usr/bin/chmod 777 /var/log/safehouse
 
-# Safehouse log and alert configuration
-ENV SAFEHOUSE_LOG_DIR=/var/log/safehouse
-ENV SAFEHOUSE_ALERT_CMD=/usr/local/lib/safehouse/safehouse_alert.sh
+# Safehouse paths are compiled into the binary — no env var overrides.
+# See container/safehouse/safehouse_wrap.c for hardcoded values.
 
 # Remove build tools no longer needed (use real rm to bypass safehouse during build)
 RUN apt-get purge -y gcc make && apt-get autoremove -y && /usr/bin/rm -rf /var/lib/apt/lists/*

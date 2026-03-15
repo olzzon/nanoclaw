@@ -15,10 +15,8 @@
  *   ALLOW_FLAG  -l                - always allow if this flag is present
  *                                   (checked before BLOCK rules)
  *
- * Environment:
- *   SAFEHOUSE_POLICY_DIR  - override policy directory (default /etc/safehouse/policies)
- *   SAFEHOUSE_LOG_DIR     - override log directory   (default /var/log/safehouse)
- *   SAFEHOUSE_ALERT_CMD   - shell command to run when a command is blocked
+ * All paths are compiled in — no runtime environment variable overrides.
+ * This prevents the agent from disabling or redirecting safehouse.
  *
  * Exit codes:
  *   (passthrough) - whatever the real binary returns
@@ -46,8 +44,9 @@
 #define MAX_LINE     512
 #define MAX_ARGS_STR 1024
 
-#define DEFAULT_POLICY_DIR "/etc/safehouse/policies"
-#define DEFAULT_LOG_DIR    "/var/log/safehouse"
+#define POLICY_DIR "/etc/safehouse/policies"
+#define LOG_DIR    "/var/log/safehouse"
+#define ALERT_CMD  "/usr/local/lib/safehouse/safehouse_alert.sh"
 
 /* ---------- policy ---------- */
 
@@ -70,8 +69,7 @@ typedef struct {
  */
 static int load_policy(const char *cmd_name, Policy *p)
 {
-    const char *dir = getenv("SAFEHOUSE_POLICY_DIR");
-    if (!dir) dir = DEFAULT_POLICY_DIR;
+    const char *dir = POLICY_DIR;
 
     char path[MAX_PATH_LEN];
     snprintf(path, sizeof(path), "%s/%s.policy", dir, cmd_name);
@@ -172,8 +170,7 @@ static void log_event(const char *cmd, const char *status,
                       const char *reason, const char *offending,
                       int argc, char *argv[])
 {
-    const char *log_dir = getenv("SAFEHOUSE_LOG_DIR");
-    if (!log_dir) log_dir = DEFAULT_LOG_DIR;
+    const char *log_dir = LOG_DIR;
 
     char log_path[MAX_PATH_LEN];
     snprintf(log_path, sizeof(log_path), "%s/events.log", log_dir);
@@ -229,17 +226,6 @@ int main(int argc, char *argv[])
         return 2;
     }
 
-    /* Runtime kill-switch: if SAFEHOUSE_ENABLED != "1", pass through
-       to the real binary without any policy checks or logging. */
-    const char *enabled = getenv("SAFEHOUSE_ENABLED");
-    if (!enabled || strcmp(enabled, "1") != 0) {
-        argv[0] = policy.real_binary;
-        execv(policy.real_binary, argv);
-        fprintf(stderr, "safehouse: exec %s failed: %s\n",
-                policy.real_binary, strerror(errno));
-        return 2;
-    }
-
     /* Check arguments against policy */
     CheckResult check = check_args(&policy, argc, argv);
 
@@ -248,21 +234,20 @@ int main(int argc, char *argv[])
         log_event(cmd_name, "BLOCKED", check.reason, check.offending,
                   argc, argv);
 
-        /* Run alert command if configured (writes to IPC for host monitoring) */
-        const char *alert_cmd = getenv("SAFEHOUSE_ALERT_CMD");
-        if (alert_cmd && alert_cmd[0] != '\0') {
-            char buf[MAX_ARGS_STR];
-            snprintf(buf, sizeof(buf),
-                     "SAFEHOUSE_CMD=%s "
-                     "SAFEHOUSE_REASON='%s' "
-                     "SAFEHOUSE_ARG='%s' "
-                     "%s",
-                     cmd_name,
-                     check.reason    ? check.reason    : "",
-                     check.offending ? check.offending : "",
-                     alert_cmd);
-            int rc = system(buf);
-            (void)rc; /* best-effort; alert failure is non-fatal */
+        /* Run alert command (writes to IPC for host monitoring).
+           Uses fork/execl with env vars instead of system() to avoid
+           shell injection via check.reason / check.offending. */
+        {
+            pid_t pid = fork();
+            if (pid == 0) {
+                /* child: set env vars and exec the alert script directly */
+                setenv("SAFEHOUSE_CMD",    cmd_name, 1);
+                setenv("SAFEHOUSE_REASON", check.reason    ? check.reason    : "", 1);
+                setenv("SAFEHOUSE_ARG",    check.offending ? check.offending : "", 1);
+                execl(ALERT_CMD, ALERT_CMD, (char *)NULL);
+                _exit(1); /* exec failed — silent */
+            }
+            /* parent: best-effort, don't wait */
         }
 
         /* Silent exit: return 0 and print nothing so the agent

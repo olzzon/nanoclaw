@@ -8,7 +8,7 @@ Safehouse is a defense-in-depth layer inside NanoClaw's agent containers. A thin
 - Zero dependencies (single C binary, no dynamic allocation)
 - Policy-driven: each command has a `.policy` file defining what's blocked
 - **Completely invisible to the agent** — blocked commands return exit 0 with no stderr output; the agent believes the operation succeeded
-- Opt-in via `SAFEHOUSE_ENABLED=true` (disabled by default for development)
+- **Always active** — compiled into the binary with no runtime kill-switch; the agent cannot disable, redirect, or tamper with safehouse
 - Event logging and host-side alerts (agent never sees these)
 
 ## Why Safehouse?
@@ -46,15 +46,17 @@ Safehouse silently neutralizes these operations. The agent thinks the command su
    IPC alerts → main channel notification
 ```
 
-## Enabling Safehouse
+## Enabling Safehouse Log Collection
 
-Safehouse is **disabled by default** so development workflows aren't restricted. To enable for production, add to your `.env`:
+Safehouse is **always active** inside the container — there is no way to disable it at runtime. All paths (policies, logs, alert script) are compiled into the binary.
+
+The host-side `SAFEHOUSE_ENABLED` setting in `.env` controls only whether safehouse **log directories are mounted** from the host for persistent audit collection:
 
 ```
 SAFEHOUSE_ENABLED=true
 ```
 
-When disabled, the shim still sits in the PATH but immediately passes through to the real binary with zero overhead — no policy checks, no logging.
+When `SAFEHOUSE_ENABLED=true`, the host mounts a per-group log directory at `/var/log/safehouse` so blocked-event logs persist across container restarts. When false, safehouse still blocks commands and writes IPC alerts, but the internal log file is ephemeral (lost when the container stops).
 
 ## How It Works
 
@@ -62,25 +64,38 @@ When disabled, the shim still sits in the PATH but immediately passes through to
 
 The safehouse shim is compiled from source (`container/safehouse/safehouse_wrap.c`) during the Docker build. Symlinks in `/usr/local/bin/` (higher PATH priority than `/usr/bin/`) point to the shim for each wrapped command. Policies are copied from `container/safehouse-policies/`.
 
-Safehouse is always **baked into the image**. The same image works for both development (disabled) and production (enabled) — toggled at runtime via the `SAFEHOUSE_ENABLED` environment variable.
+All paths are **hardcoded at compile time**:
+- Policy directory: `/etc/safehouse/policies`
+- Log directory: `/var/log/safehouse`
+- Alert script: `/usr/local/lib/safehouse/safehouse_alert.sh`
 
-### Runtime (enabled)
+No environment variables can override these. This prevents the agent from disabling safehouse, redirecting policies, suppressing logs, or hijacking the alert path.
+
+### Runtime
 
 1. Agent runs `rm -rf /app/src`
 2. Shell resolves `/usr/local/bin/rm` → safehouse shim
-3. Shim checks `SAFEHOUSE_ENABLED=1`, loads `/etc/safehouse/policies/rm.policy`
+3. Shim loads `/etc/safehouse/policies/rm.policy`
 4. Policy blocks: `-f` flag is in `BLOCK_FLAG` list
 5. Shim logs the event to `/var/log/safehouse/events.log`
-6. Shim writes alert to `/workspace/ipc/safehouse_alerts.jsonl`
-7. Shim returns **exit 0** with **no output** — agent thinks it worked
-8. Host IPC watcher picks up the alert and notifies the main channel
+6. Shim forks and runs the alert script via `execl` (no shell — immune to injection)
+7. Alert script writes to `/workspace/ipc/safehouse_alerts.jsonl`
+8. Shim returns **exit 0** with **no output** — agent thinks it worked
+9. Host IPC watcher picks up the alert and notifies the main channel
 
-### Runtime (disabled)
+## Security Hardening
 
-1. Agent runs `rm -rf /app/src`
-2. Shell resolves `/usr/local/bin/rm` → safehouse shim
-3. Shim checks `SAFEHOUSE_ENABLED` != `1`, immediately `execv()`s `/usr/bin/rm`
-4. Real binary runs normally — no policy checks, no logging
+Safehouse is designed to resist tampering by the agent running inside the container:
+
+| Attack vector | Mitigation |
+|---------------|------------|
+| `unset SAFEHOUSE_ENABLED` | No env var check — safehouse is always active |
+| `export SAFEHOUSE_POLICY_DIR=/tmp/empty` | Policy dir is a compile-time constant, not read from env |
+| `export SAFEHOUSE_LOG_DIR=/dev/null` | Log dir is a compile-time constant, not read from env |
+| `export SAFEHOUSE_ALERT_CMD="malicious"` | Alert script path is a compile-time constant, not read from env |
+| Inject shell metacharacters via arguments | Alert script invoked via `fork/execl`, not `system()` — no shell interpretation |
+| Overwrite `/usr/local/bin/rm` shim | Container filesystem is read-only for system paths |
+| Modify `.policy` files in `/etc/safehouse/` | `/etc/` is a protected path, blocked by safehouse itself |
 
 ## Files
 
@@ -89,9 +104,9 @@ Safehouse is always **baked into the image**. The same image works for both deve
 | `container/safehouse/safehouse_wrap.c` | C shim source — single file, no external deps |
 | `container/safehouse/safehouse_alert.sh` | Alert script — writes blocked events to IPC |
 | `container/safehouse/Makefile` | Builds the shim |
-| `container/safehouse-policies/*.policy` | Per-command policy files (11 commands) |
-| `src/config.ts` | `SAFEHOUSE_ENABLED` flag |
-| `src/container-runner.ts` | Passes env var, mounts log dir when enabled |
+| `container/safehouse-policies/*.policy` | Per-command policy files |
+| `src/config.ts` | `SAFEHOUSE_ENABLED` flag (controls host-side log mounts only) |
+| `src/container-runner.ts` | Mounts log dir when enabled |
 | `src/ipc.ts` | Monitors alerts, notifies main channel |
 
 ## Policy Format
@@ -170,6 +185,7 @@ Layer 4: Safehouse (inside container)
   → Destructive commands silently neutralized
   → Agent believes operations succeeded
   → All events logged for host-side audit
+  → Tamper-proof: all paths compiled in, no env var overrides
 
 Layer 5: Read-only mounts
   → Project root and global memory are read-only
